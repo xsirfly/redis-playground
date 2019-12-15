@@ -1,0 +1,352 @@
+<html>
+   <head>
+		<script src="help.js"></script>
+	   <script src="autocomplete.js"></script>
+	   <style type="text/css">
+	   	body {
+		  background: #000;
+		  color: #fff;
+		  padding: 10px;
+		}
+
+		#console {
+		    font-family: 'Courier';
+		    font-size: 14px;
+		    margin: 0;
+		}
+
+		p {
+		  line-height: 1.4em;
+		  margin: 0;
+		}
+
+		.line:before {
+		  /*content: attr(data-user)"@"attr(data-host)":"attr(data-path)"# ";*/
+		  content: "127.0.0.1:6379> ";
+		}
+
+		.line--active:after {
+		  background: rgba(255, 255, 255, 0.3);
+		  color: transparent;
+		  content: ".";
+		}
+
+		.cursor {
+		    background: rgba(255, 255, 255, 0.3);
+		    color: transparent;
+		    content: ".";
+		}
+
+		.green {
+		  color: lime;
+		}
+		.red {
+		  color: red;
+		}
+	   </style>
+   </head>
+   
+   <body>
+		<pre id="console"></pre>
+	</body>
+	<script type = "text/javascript">
+		function sleep(ms) {
+			return new Promise(resolve => setTimeout(resolve, ms));
+		}
+
+		/**
+		 * Configured commands can be found at the bottom of this file.
+		 * https://codepen.io/tsndr/pen/qYxryo?page=1&
+		 */
+
+		/* Keys. */		
+        var ctrlKey = 17;
+        var cmdKey = 91;
+		var selectKey = 93;
+        var vKey = 86;
+        var cKey = 67;
+		var ctrlDown = false;
+		
+		// ---------------------------------------------------------------------
+		// ---- AutoComplete
+		// ---------------------------------------------------------------------
+		var autocomplete = {};
+		/* redisCommands is defined in autocomplete.js */
+		autocomplete.words = redisCommands;
+
+		autocomplete.match = function(text) {
+			var prefix = text.toUpperCase();
+			var completions = [];			
+			for(var i = 0; i < autocomplete.words.length; i++) {
+				var current = autocomplete.words[i];
+				if(current.startsWith(prefix)) {
+					completions.push(current);
+				}
+			}
+			completions.push(text);
+			return completions;
+		}
+
+		// ---------------------------------------------------------------------
+		// ---- Terminal
+		// ---------------------------------------------------------------------
+
+		var terminal = {};
+
+		terminal.init = function() {
+		    document.addEventListener('keydown', terminal.event.keydown, false);
+			document.addEventListener('keyup', terminal.event.keyup, false);
+			document.addEventListener('paste', terminal.event.paste, false);
+		};
+		terminal.scrollDown = function() {
+		    window.scrollTo(0, document.getElementById('console').clientHeight);
+		};
+		terminal.newLine = function() {
+		    if (document.getElementsByClassName('line--active').length)
+		        document.getElementsByClassName('line--active')[0].classList.remove('line--active');
+		    var cli = document.getElementById('console');
+			cli.innerHTML += '<p class="line line--active"></p>';
+			cli.lastElementChild.scrollIntoView(false);
+			terminal.cursor.jumpToBeginning();
+		};
+		terminal.addLine = function(content) {
+		    var self = this;
+		    document.getElementById('console').innerHTML += '<p>' + content + '</p>';
+		    self.newLine();
+		};
+		terminal.typeLine = async function(content) {
+			var self = this;
+			
+			var cli = document.getElementById('console');
+			cli.innerHTML += '<p class="line line--active"></p>';
+			cli.lastElementChild.scrollIntoView(false);
+			terminal.cursor.jumpToBeginning();
+
+			var paragraph = cli.lastChild;
+			for (var i = 0; i < content.length; i++) {
+				paragraph.innerText += content[i];
+				await sleep(50);
+			}
+			self.newLine();
+		};
+		terminal.appendToLine = function(content) {
+			var line = document.getElementsByClassName('line--active')[0];
+			var lineText = line.innerText;
+			line.innerText = lineText.substring(0, terminal.cursor.position) + content + lineText.substring(terminal.cursor.position, lineText.length);
+			
+			terminal.cursor.advanceCursorPosition(content.length);
+			terminal.clearAutoComplete();
+		};
+				
+		terminal.cursor = {};
+		terminal.cursor.position = 0;
+		terminal.cursor.jumpToEnd = function() {
+			var line = document.getElementsByClassName('line--active')[0];
+			terminal.cursor.updateCursorPosition(line.innerText.length);
+		};
+		terminal.cursor.jumpToBeginning = function() {
+			terminal.cursor.updateCursorPosition(0);
+		};
+		terminal.cursor.moveForward = function() {
+			terminal.cursor.advanceCursorPosition(1);
+		};
+		terminal.cursor.moveBackward = function() {
+			terminal.cursor.advanceCursorPosition(-1);
+		};
+		terminal.cursor.advanceCursorPosition = function(pos) {
+			var line = document.getElementsByClassName('line--active')[0];
+			var newPos = terminal.cursor.position + pos;
+			terminal.cursor.updateCursorPosition(newPos);
+		}
+		terminal.cursor.updateCursorPosition = function(pos) {
+			var line = document.getElementsByClassName('line--active')[0];
+			terminal.cursor.position = pos;
+			terminal.cursor.position = Math.min(terminal.cursor.position, line.innerText.length);
+			terminal.cursor.position = Math.max(terminal.cursor.position, 0);
+			
+			/* Remove previous span. */
+			var content = line.innerText;
+			var cursor = line.getElementsByTagName('span')[0];
+			if(cursor) {
+				line.removeChild(cursor);
+			}			
+
+			if(content) {
+				var prefix = content.substring(0,terminal.cursor.position);
+				var highlighted = content.substring(terminal.cursor.position, terminal.cursor.position+1);
+				var suffix = content.substring(terminal.cursor.position+1, content.length);				
+				line.innerHTML = prefix + "<span style='background-color: rgba(255, 255, 255, 0.5);'>" + highlighted + "</span>" + suffix;
+			}
+		};
+
+		terminal.clearAutoComplete = function() {
+			terminal.completions = [];
+		}
+
+		terminal.history = {};
+		terminal.history.idx = null;
+		terminal.history.data = [];
+		terminal.history.add = function(cmd) {
+		    terminal.history.idx = null;
+		    terminal.history.data.push(cmd);
+		};
+		terminal.history.getLast = function(direction) {
+		    if (terminal.history.idx === null)
+		        terminal.history.idx = terminal.history.data.length;
+		    if (direction === '-' && terminal.history.idx > 0)
+		        terminal.history.idx--;
+		    else if (direction === '+' && terminal.history.idx <= terminal.history.data.length - 1)
+		        terminal.history.idx++;
+		    return terminal.history.data[terminal.history.idx];
+		};
+		
+		terminal.event = {};
+		terminal.event.paste = function(e) {
+			// Stop data actually being pasted into div
+			e.stopPropagation();
+    		e.preventDefault();
+			// Get pasted data via clipboard API
+			clipboardData = e.clipboardData || window.clipboardData;
+			data = clipboardData.getData('Text');
+			if(data.length) {
+				terminal.appendToLine(data);
+			}
+		}
+		
+		terminal.event.keyup = function(e) {
+			if (e.keyCode == ctrlKey || e.keyCode == cmdKey || e.keyCode == selectKey) {
+				ctrlDown = false;
+				return;
+			}
+		}
+
+		terminal.event.keydown = function(e) {
+		    var self = terminal;
+		    var char = e.key;
+		    var line = document.getElementsByClassName('line--active')[0];
+			
+			// Check to see if either command or control key is pressed.
+			if(ctrlDown) return;
+			if (e.keyCode == ctrlKey || e.keyCode == cmdKey || e.keyCode == selectKey) {
+				ctrlDown = true;
+				return;
+			}
+		    if (e.key === 'Backspace') {
+				if(terminal.cursor.position > 0) {
+					line.innerText = line.innerText.substring(0, terminal.cursor.position-1) + line.innerText.substring(terminal.cursor.position, line.innerText.length)
+					terminal.cursor.moveBackward();
+					terminal.clearAutoComplete();
+				}
+		        return;
+		    } else if (e.key === 'Tab') {
+				e.preventDefault();
+				if(!terminal.completions || terminal.completions.length == 0) {
+					terminal.completions = autocomplete.match(line.innerText);
+				}
+				var completion = terminal.completions.shift();
+				line.innerText = completion;
+				terminal.cursor.updateCursorPosition(line.innerText.length);
+		        return;
+		    } else if (e.key === 'ArrowLeft') {
+				terminal.cursor.moveBackward();
+				 e.preventDefault();
+				 return;
+			} else if (e.key === 'ArrowRight') {
+				terminal.cursor.moveForward();
+				 e.preventDefault();
+				 return;
+			} else if (e.key === 'ArrowUp') {
+				terminal.clearAutoComplete();
+				line.innerHTML = terminal.history.getLast('-') || '';
+				terminal.cursor.jumpToEnd();
+		        e.preventDefault();
+		        return;
+		    } else if (e.key === 'ArrowDown') {
+				terminal.clearAutoComplete();
+				line.innerHTML = terminal.history.getLast('+') || '';
+				terminal.cursor.jumpToEnd();
+		        e.preventDefault();
+		        return;
+		    } else if (e.key === 'Space') {
+		        char = " ";
+		    } else if (e.key === 'Enter') {
+				terminal.clearAutoComplete();
+		        self.history.add(line.innerText);
+		        if (!self.command.exec(line.innerText)) {
+					if(line.innerText != '') {
+						ws.send(line.innerText);
+					}
+				}
+		        return;
+		    } else if (e.key.length > 1) {
+		        return;
+		    }
+
+			line.innerText = line.innerText.substring(0, terminal.cursor.position) + char + line.innerText.substring(terminal.cursor.position, line.innerText.length);
+			terminal.cursor.moveForward();
+			terminal.clearAutoComplete();
+		};
+
+		terminal.init();
+
+		// Commands
+		terminal.command = {};
+		terminal.command.exec = function(cmd) {
+			var handled = false;
+			if(cmd.startsWith("help")) {				
+				handled = true;
+				var helpMsg = "";
+				var command = cmd.substring("help ".length, cmd.length);
+				var help = getHelp(command);
+				if(help) {
+					helpMsg = help['cmd'] + " ";
+					helpMsg += "<font color='#a0a0a0'>" + help["args"] + "</font>\n";
+					helpMsg += "<font color='#e6c72f'>summary: </font>" + help["desc"];
+				}
+				terminal.addLine(helpMsg);
+			} else if (cmd == '') {
+				handled = true;
+				terminal.newLine();
+			}
+			return handled;
+		};				
+		terminal.welcome = function() {
+			var welcome_msg = "Welcome to redis playground\nPlease wait while we establish your connection."
+			terminal.addLine(welcome_msg);
+		}
+
+		// ---------------------------------------------------------------------
+		// ---- WebSocket
+		// ---------------------------------------------------------------------
+		var ws;
+		function WebSocketConnect() {
+			if ("WebSocket" in window) {
+				var websocketAddress = window.location.href;
+				websocketAddress = websocketAddress.replace("http", "ws");
+				websocketAddress += "ws";
+				ws = new WebSocket(websocketAddress);
+
+				ws.onopen = function() {
+					console.log("Connected");
+		   		};
+			
+				ws.onmessage = function (evt) {
+					var received_msg = evt.data;
+					// console.log("Message is received: " + received_msg);
+					terminal.addLine(received_msg);
+				};
+
+				ws.onclose = function() {
+					terminal.addLine("Connection lost");
+					// console.warn("Connection is closed..."); 
+		   		};
+			} else {
+				terminal.addLine("WebSocket not supported by your Browser!");
+				console.error("WebSocket not supported by your Browser!");
+			}
+		}
+
+		terminal.welcome();
+		WebSocketConnect();
+	</script>
+</html>
